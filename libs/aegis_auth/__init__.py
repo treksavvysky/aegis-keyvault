@@ -1,0 +1,54 @@
+import os
+from typing import Any
+
+import jwt
+from sqlalchemy import create_engine, text
+
+
+class VerificationError(Exception):
+    pass
+
+
+def _get_database_url() -> str:
+    return os.getenv("AEGIS_DATABASE_URL", "sqlite:///./aegis.db")
+
+
+def _get_signing_key() -> str:
+    key = os.getenv("AEGIS_SIGNING_KEY")
+    if not key:
+        raise VerificationError("AEGIS_SIGNING_KEY is required")
+    return key
+
+
+def _is_revoked(jti: str) -> bool:
+    engine = create_engine(_get_database_url(), connect_args={"check_same_thread": False})
+    with engine.connect() as conn:
+        result = conn.execute(text("SELECT 1 FROM revoked_tokens WHERE jti = :jti"), {"jti": jti})
+        return result.first() is not None
+
+
+def verify_token(token: str, expected_aud: str) -> dict[str, Any]:
+    try:
+        claims = jwt.decode(
+            token,
+            _get_signing_key(),
+            algorithms=["HS256"],
+            audience=expected_aud,
+            options={"require": ["exp", "iat", "jti", "aud", "sub"]},
+        )
+    except jwt.PyJWTError as exc:
+        raise VerificationError("Invalid token") from exc
+
+    jti = claims.get("jti")
+    if not jti:
+        raise VerificationError("Missing jti")
+    if _is_revoked(jti):
+        raise VerificationError("Token revoked")
+    return claims
+
+
+def require_scopes(claims: dict[str, Any], scopes: list[str]) -> None:
+    token_scopes = set(claims.get("scopes", []))
+    missing = [scope for scope in scopes if scope not in token_scopes]
+    if missing:
+        raise VerificationError(f"Missing scopes: {', '.join(missing)}")
