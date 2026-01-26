@@ -35,3 +35,9 @@ quote-style = "double"
 
 [tool.pytest.ini_options]
 addopts = "-q"
+
+[tool.setuptools]
+packages = ["services", "services.aegis", "libs", "libs.aegis_auth", "aegis_keyvault"]
+
+[tool.setuptools.package-data]
+aegis_keyvault = ["py.typed"]
