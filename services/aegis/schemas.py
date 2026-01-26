@@ -27,6 +27,21 @@ class TokenResponse(BaseModel):
     jti: str
 
 
+class IntrospectRequest(BaseModel):
+    expected_aud: str | None = None
+
+
+class IntrospectResponse(BaseModel):
+    active: bool
+    sub: str | None = None
+    aud: str | None = None
+    scopes: list[str] | None = None
+    exp: int | None = None
+    iat: int | None = None
+    jti: str | None = None
+    reason: str | None = None
+
+
 class TokenRevokeRequest(BaseModel):
     jti: str
     reason: str | None = None

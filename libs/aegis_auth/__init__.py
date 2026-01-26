@@ -1,6 +1,7 @@
 import os
 from typing import Any
 
+import httpx
 import jwt
 from sqlalchemy import create_engine, text
 
@@ -20,8 +21,9 @@ def _get_signing_key() -> str:
     return key
 
 
-def _is_revoked(jti: str) -> bool:
-    engine = create_engine(_get_database_url(), connect_args={"check_same_thread": False})
+def is_token_revoked(jti: str, database_url: str | None = None) -> bool:
+    url = database_url or _get_database_url()
+    engine = create_engine(url, connect_args={"check_same_thread": False})
     with engine.connect() as conn:
         result = conn.execute(text("SELECT 1 FROM revoked_tokens WHERE jti = :jti"), {"jti": jti})
         return result.first() is not None
@@ -42,8 +44,6 @@ def verify_token(token: str, expected_aud: str) -> dict[str, Any]:
     jti = claims.get("jti")
     if not jti:
         raise VerificationError("Missing jti")
-    if _is_revoked(jti):
-        raise VerificationError("Token revoked")
     return claims
 
 
@@ -52,3 +52,29 @@ def require_scopes(claims: dict[str, Any], scopes: list[str]) -> None:
     missing = [scope for scope in scopes if scope not in token_scopes]
     if missing:
         raise VerificationError(f"Missing scopes: {', '.join(missing)}")
+
+
+def introspect_token(
+    base_url: str,
+    token: str,
+    expected_aud: str | None = None,
+    admin_token: str | None = None,
+    timeout_seconds: float = 5.0,
+) -> dict[str, Any]:
+    if not admin_token:
+        raise VerificationError("Admin token required for introspection")
+    headers = {"Authorization": f"Bearer {token}", "X-Admin-Token": admin_token}
+    payload: dict[str, Any] | None = None
+    if expected_aud is not None:
+        payload = {"expected_aud": expected_aud}
+    try:
+        response = httpx.post(
+            f"{base_url.rstrip('/')}/v1/introspect",
+            json=payload,
+            headers=headers,
+            timeout=timeout_seconds,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise VerificationError("Introspection failed") from exc
+    return response.json()

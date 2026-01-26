@@ -9,7 +9,9 @@ from .config import DEFAULT_TTL_SECONDS, MAX_TTL_SECONDS, get_signing_key
 
 
 class TokenError(ValueError):
-    pass
+    def __init__(self, message: str, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 def generate_api_key() -> tuple[str, str, str]:
@@ -68,3 +70,30 @@ def mint_token(sub: str, scopes: list[str], aud: str, ttl_seconds: int | None) -
     }
     token = jwt.encode(payload, get_signing_key(), algorithm="HS256")
     return token, jti, ttl
+
+
+def decode_token(token: str, expected_aud: str | None = None) -> dict:
+    options = {"require": ["exp", "iat", "jti", "aud", "sub"]}
+    if expected_aud is None:
+        options["verify_aud"] = False
+    try:
+        if expected_aud is None:
+            return jwt.decode(
+                token,
+                get_signing_key(),
+                algorithms=["HS256"],
+                options=options,
+            )
+        return jwt.decode(
+            token,
+            get_signing_key(),
+            algorithms=["HS256"],
+            audience=expected_aud,
+            options=options,
+        )
+    except jwt.ExpiredSignatureError as exc:
+        raise TokenError("Token expired", code="expired") from exc
+    except jwt.InvalidAudienceError as exc:
+        raise TokenError("Invalid audience", code="invalid_audience") from exc
+    except jwt.PyJWTError as exc:
+        raise TokenError("Invalid token", code="invalid_token") from exc

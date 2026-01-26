@@ -1,7 +1,7 @@
 import datetime as dt
 import uuid
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Body, Depends, FastAPI, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,7 @@ from .db import get_db
 from .models import ApiKey, Principal, RevokedToken
 from .security import (
     TokenError,
+    decode_token,
     generate_api_key,
     hash_secret,
     mint_token,
@@ -187,6 +188,93 @@ def mint_access_token(
     )
 
     return schemas.TokenResponse(access_token=token, token_type="bearer", expires_in=ttl, jti=jti)
+
+
+@app.post("/v1/introspect", response_model=schemas.IntrospectResponse)
+def introspect_access_token(
+    request: Request,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    payload: schemas.IntrospectRequest | None = Body(default=None),
+) -> schemas.IntrospectResponse:
+    admin_token = request.headers.get("X-Admin-Token")
+    if not admin_token or admin_token != get_admin_token():
+        emit_audit_event(
+            db,
+            event_type="token.introspected",
+            result="deny",
+            principal_id=None,
+            metadata={"trace_id": request.state.trace_id, "reason": "admin_required"},
+        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin token required")
+
+    if credentials is None or not credentials.credentials:
+        emit_audit_event(
+            db,
+            event_type="token.introspected",
+            result="deny",
+            principal_id=None,
+            metadata={"trace_id": request.state.trace_id, "reason": "missing_token"},
+        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing access token")
+
+    expected_aud = payload.expected_aud if payload else None
+    try:
+        claims = decode_token(credentials.credentials, expected_aud=expected_aud)
+    except TokenError as exc:
+        reason = exc.code or "invalid_token"
+        emit_audit_event(
+            db,
+            event_type="token.introspected",
+            result="deny",
+            principal_id=None,
+            metadata={"trace_id": request.state.trace_id, "reason": reason},
+        )
+        return schemas.IntrospectResponse(active=False, reason=reason)
+
+    jti = claims.get("jti")
+    if jti and db.get(RevokedToken, jti) is not None:
+        emit_audit_event(
+            db,
+            event_type="token.introspected",
+            result="deny",
+            principal_id=claims.get("sub"),
+            token_jti=jti,
+            metadata={"trace_id": request.state.trace_id, "reason": "revoked"},
+        )
+        return schemas.IntrospectResponse(
+            active=False,
+            sub=claims.get("sub"),
+            aud=claims.get("aud"),
+            scopes=claims.get("scopes", []),
+            exp=claims.get("exp"),
+            iat=claims.get("iat"),
+            jti=jti,
+            reason="revoked",
+        )
+
+    emit_audit_event(
+        db,
+        event_type="token.introspected",
+        result="ok",
+        principal_id=claims.get("sub"),
+        token_jti=jti,
+        metadata={
+            "trace_id": request.state.trace_id,
+            "aud": claims.get("aud"),
+            "scopes": claims.get("scopes", []),
+        },
+    )
+    return schemas.IntrospectResponse(
+        active=True,
+        sub=claims.get("sub"),
+        aud=claims.get("aud"),
+        scopes=claims.get("scopes", []),
+        exp=claims.get("exp"),
+        iat=claims.get("iat"),
+        jti=jti,
+        reason=None,
+    )
 
 
 @app.post("/v1/revoke/token")

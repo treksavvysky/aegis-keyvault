@@ -98,8 +98,17 @@ def test_revoked_jti_rejected(client, db_session):
         json={"jti": data["jti"], "reason": "test"},
     )
     assert revoke.status_code == 200
-    with pytest.raises(VerificationError):
-        verify_token(data["access_token"], expected_aud="svc")
+    introspect = client.post(
+        "/v1/introspect",
+        headers={
+            "Authorization": f"Bearer {data['access_token']}",
+            "X-Admin-Token": "test-admin-token",
+        },
+        json={"expected_aud": "svc"},
+    )
+    assert introspect.status_code == 200
+    assert introspect.json()["active"] is False
+    assert introspect.json()["reason"] == "revoked"
     assert db_session.query(RevokedToken).filter_by(jti=data["jti"]).count() == 1
 
 
@@ -136,3 +145,87 @@ def test_require_scopes(client):
     require_scopes(claims, ["repo.read"])
     with pytest.raises(VerificationError):
         require_scopes(claims, ["repo.write"])
+
+
+def test_introspect_active_token(client, db_session):
+    api_key, _, principal_id = _create_key(client)
+    response = client.post(
+        "/v1/token",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={"aud": "svc", "scopes": ["repo.read"], "ttl_seconds": 60},
+    )
+    token = response.json()["access_token"]
+    introspect = client.post(
+        "/v1/introspect",
+        headers={"Authorization": f"Bearer {token}", "X-Admin-Token": "test-admin-token"},
+        json={"expected_aud": "svc"},
+    )
+    assert introspect.status_code == 200
+    payload = introspect.json()
+    assert payload["active"] is True
+    assert payload["sub"] == principal_id
+
+    events = db_session.query(AuditEvent).filter_by(event_type="token.introspected").all()
+    assert any(event.result == "ok" for event in events)
+
+
+def test_introspect_expired_token(client, db_session):
+    api_key, _, _ = _create_key(client)
+    with freeze_time(dt.datetime.now(dt.timezone.utc)):
+        response = client.post(
+            "/v1/token",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={"aud": "svc", "scopes": ["repo.read"], "ttl_seconds": 1},
+        )
+        token = response.json()["access_token"]
+        with freeze_time(dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=120)):
+            introspect = client.post(
+                "/v1/introspect",
+                headers={"Authorization": f"Bearer {token}", "X-Admin-Token": "test-admin-token"},
+                json={"expected_aud": "svc"},
+            )
+            assert introspect.status_code == 200
+            payload = introspect.json()
+            assert payload["active"] is False
+            assert payload["reason"] == "expired"
+
+    events = db_session.query(AuditEvent).filter_by(event_type="token.introspected").all()
+    assert any(event.result == "deny" for event in events)
+
+
+def test_introspect_wrong_audience(client):
+    api_key, _, _ = _create_key(client)
+    response = client.post(
+        "/v1/token",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={"aud": "svc", "scopes": ["repo.read"], "ttl_seconds": 60},
+    )
+    token = response.json()["access_token"]
+    introspect = client.post(
+        "/v1/introspect",
+        headers={"Authorization": f"Bearer {token}", "X-Admin-Token": "test-admin-token"},
+        json={"expected_aud": "other"},
+    )
+    assert introspect.status_code == 200
+    payload = introspect.json()
+    assert payload["active"] is False
+    assert payload["reason"] == "invalid_audience"
+
+
+def test_introspect_access_control_enforced(client, db_session):
+    api_key, _, _ = _create_key(client)
+    response = client.post(
+        "/v1/token",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={"aud": "svc", "scopes": ["repo.read"], "ttl_seconds": 60},
+    )
+    token = response.json()["access_token"]
+    introspect = client.post(
+        "/v1/introspect",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"expected_aud": "svc"},
+    )
+    assert introspect.status_code == 401
+
+    events = db_session.query(AuditEvent).filter_by(event_type="token.introspected").all()
+    assert any(event.result == "deny" for event in events)
