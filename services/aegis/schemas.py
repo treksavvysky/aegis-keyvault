@@ -1,0 +1,37 @@
+from pydantic import BaseModel, Field
+
+
+class KeyCreateRequest(BaseModel):
+    principal_id: str | None = None
+    principal_name: str | None = None
+    principal_type: str | None = None
+    allowed_scopes: list[str] = Field(default_factory=list)
+
+
+class KeyCreateResponse(BaseModel):
+    api_key: str
+    key_id: str
+    principal_id: str
+
+
+class TokenRequest(BaseModel):
+    aud: str | None = None
+    scopes: list[str] = Field(default_factory=list)
+    ttl_seconds: int | None = None
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str
+    expires_in: int
+    jti: str
+
+
+class TokenRevokeRequest(BaseModel):
+    jti: str
+    reason: str | None = None
+
+
+class KeyRevokeRequest(BaseModel):
+    key_id: str
+    status: str = "revoked"

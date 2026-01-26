@@ -1,7 +1,11 @@
 fastapi
 uvicorn
 sqlalchemy
-typer
+alembic
+pyjwt
+bcrypt
+pydantic
 python-dotenv
 pytest
 httpx
+freezegun
