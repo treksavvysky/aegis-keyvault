@@ -55,7 +55,14 @@ def compute_exp(ttl_seconds: int | None) -> tuple[int, int, int]:
     return int(now.timestamp()), int(exp.timestamp()), ttl
 
 
-def mint_token(sub: str, scopes: list[str], aud: str, ttl_seconds: int | None) -> tuple[str, str, int]:
+def mint_token(
+    sub: str,
+    scopes: list[str],
+    aud: str,
+    ttl_seconds: int | None,
+    *,
+    key_id: str | None = None,
+) -> tuple[str, str, int]:
     iat, exp, ttl = compute_exp(ttl_seconds)
     jti = str(uuid.uuid4())
     payload = {
@@ -66,5 +73,7 @@ def mint_token(sub: str, scopes: list[str], aud: str, ttl_seconds: int | None) -
         "exp": exp,
         "jti": jti,
     }
+    if key_id:
+        payload["key_id"] = key_id
     token = jwt.encode(payload, get_signing_key(), algorithm="HS256")
     return token, jti, ttl

@@ -1,13 +1,15 @@
 import datetime as dt
 import uuid
 
+import jwt
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jwt import ExpiredSignatureError, InvalidAudienceError, MissingRequiredClaimError, PyJWTError
 from sqlalchemy.orm import Session
 
 from . import schemas
 from .audit import emit_audit_event
-from .config import get_admin_token
+from .config import get_admin_token, get_signing_key
 from .db import get_db
 from .models import ApiKey, Principal, RevokedToken
 from .security import (
@@ -44,6 +46,63 @@ def require_admin(request: Request) -> None:
     if not token or token != get_admin_token():
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin token required")
 
+
+def _decode_access_token(
+    token: str,
+    *,
+    expected_aud: str | None = None,
+) -> tuple[dict | None, str | None]:
+    options = {"require": ["exp", "iat", "jti", "aud", "sub", "scopes"]}
+    try:
+        if expected_aud:
+            claims = jwt.decode(
+                token,
+                get_signing_key(),
+                algorithms=["HS256"],
+                audience=expected_aud,
+                options=options,
+            )
+        else:
+            claims = jwt.decode(
+                token,
+                get_signing_key(),
+                algorithms=["HS256"],
+                options=options,
+            )
+    except ExpiredSignatureError:
+        return None, "expired"
+    except InvalidAudienceError:
+        return None, "wrong_aud"
+    except MissingRequiredClaimError:
+        return None, "missing_claim"
+    except PyJWTError:
+        return None, "bad_signature"
+
+    if not claims.get("aud"):
+        return None, "missing_claim"
+    if not isinstance(claims.get("scopes"), list):
+        return None, "missing_claim"
+    return claims, None
+
+
+def _evaluate_token_status(
+    db: Session,
+    claims: dict,
+) -> str | None:
+    jti = claims.get("jti")
+    if jti and db.get(RevokedToken, jti):
+        return "revoked"
+    principal_id = claims.get("sub")
+    if principal_id:
+        principal = db.get(Principal, principal_id)
+        if principal and principal.status != "active":
+            return "disabled_principal"
+    key_id = claims.get("key_id")
+    if key_id:
+        api_key = db.get(ApiKey, key_id)
+        if api_key is None or api_key.status != "active":
+            return "revoked"
+    return None
 
 @app.post("/v1/keys", response_model=schemas.KeyCreateResponse)
 def create_key(
@@ -167,6 +226,7 @@ def mint_access_token(
         scopes=requested_scopes,
         aud=payload.aud,
         ttl_seconds=payload.ttl_seconds,
+        key_id=api_key.id,
     )
 
     api_key.last_used_at = dt.datetime.now(dt.timezone.utc)
@@ -187,6 +247,71 @@ def mint_access_token(
     )
 
     return schemas.TokenResponse(access_token=token, token_type="bearer", expires_in=ttl, jti=jti)
+
+
+@app.post("/v1/introspect", response_model=schemas.IntrospectResponse)
+def introspect_token(
+    payload: schemas.IntrospectRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> schemas.IntrospectResponse:
+    # TODO: Replace X-Admin-Token bootstrap auth with scoped service auth (introspect.token).
+    require_admin(request)
+    if credentials is None or not credentials.credentials:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing access token")
+
+    claims, reason = _decode_access_token(credentials.credentials, expected_aud=payload.expected_aud)
+    if claims:
+        status_reason = _evaluate_token_status(db, claims)
+        if status_reason:
+            reason = status_reason
+
+    active = reason is None and claims is not None
+    response = schemas.IntrospectResponse(
+        active=active,
+        sub=claims.get("sub") if claims else None,
+        aud=claims.get("aud") if claims else None,
+        scopes=claims.get("scopes") if claims else [],
+        exp=claims.get("exp") if claims else None,
+        iat=claims.get("iat") if claims else None,
+        jti=claims.get("jti") if claims else None,
+        reason=reason,
+    )
+
+    emit_audit_event(
+        db,
+        event_type="token.introspected",
+        result="ok" if active else "deny",
+        principal_id=claims.get("sub") if claims else None,
+        token_jti=claims.get("jti") if claims else None,
+        metadata={"trace_id": request.state.trace_id, "reason": reason},
+    )
+
+    return response
+
+
+@app.get("/v1/demo/protected")
+def protected_demo(
+    request: Request,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> dict:
+    if credentials is None or not credentials.credentials:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing access token")
+    claims, reason = _decode_access_token(credentials.credentials, expected_aud="jct")
+    if reason:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=reason)
+    status_reason = _evaluate_token_status(db, claims or {})
+    if status_reason:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=status_reason)
+    try:
+        validate_scopes(claims.get("scopes", []))
+    except TokenError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if "tasks.enqueue" not in set(claims.get("scopes", [])):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Missing scope: tasks.enqueue")
+    return {"status": "ok", "principal_id": claims.get("sub")}
 
 
 @app.post("/v1/revoke/token")
