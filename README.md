@@ -1,6 +1,8 @@
-# SSH Vault
+# Aegis KeyVault
 
 *Securely centralize your SSH keys, passwords, and other sensitive project variables.*
+
+Repository: https://github.com/treksavvysky/aegis-keyvault
 
 ---
 
@@ -20,14 +22,14 @@
 
 ## Overview
 
-**SSH Vault** is a lightweight secrets-management service purpose-built for DevOps workflows that rely heavily on SSH.
+**Aegis KeyVault** is a lightweight secrets-management service purpose-built for DevOps workflows that rely heavily on SSH.
 Its main scope is to **store, encrypt, and serve confidential data**—primarily:
 
 * **SSH private/public key pairs**
 * **System & service passwords**
 * **Project-specific environment variables (API tokens, DB credentials, etc.)**
 
-By isolating secrets in a single, auditable store, SSH Vault eliminates “secret sprawl,” hard-coded credentials, and the risk of leaking sensitive data across repos or CI/CD pipelines.
+By isolating secrets in a single, auditable store, Aegis KeyVault eliminates “secret sprawl,” hard-coded credentials, and the risk of leaking sensitive data across repos or CI/CD pipelines.
 
 ---
 
@@ -47,34 +49,31 @@ By isolating secrets in a single, auditable store, SSH Vault eliminates “secre
 
 ## Quick Start
 
-1. **Clone & Launch (Docker):**
+1. **Clone the repo**
 
    ```bash
-   git clone https://github.com/your-org/ssh-vault.git
-   cd ssh-vault
-   docker compose up -d
+   git clone https://github.com/treksavvysky/aegis-keyvault.git
+   cd aegis-keyvault
    ```
 
-2. **Bootstrap the root user:**
+2. **Create a virtual environment and install dependencies**
 
    ```bash
-   ./vault cli init --user admin
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
    ```
 
-3. **Store an SSH key:**
+3. **Run the API server**
 
    ```bash
-   ./vault cli put \
-     --path secrets/servers/prod/web01/id_rsa \
-     --file ~/.ssh/id_rsa
+   uvicorn aegis_keyvault.api:app --reload
    ```
 
-4. **Retrieve it in a CI job (one-shot token):**
+4. **Check health**
 
    ```bash
-   VAULT_TOKEN=$(curl -s $VAULT_URL/token | jq -r '.token')
-   curl -s -H "Authorization: Bearer $VAULT_TOKEN" \
-        $VAULT_URL/secrets/servers/prod/web01/id_rsa > id_rsa
+   curl http://127.0.0.1:8000/health
    ```
 
 ---
@@ -150,10 +149,10 @@ We ♥ PRs! Please open an issue first to discuss major changes.
 
 ## License
 
-SSH Vault is released under the **MIT License**. See `LICENSE` for details.
+Aegis KeyVault is released under the **MIT License**. See `LICENSE` for details.
 
 ---
 
 <div align="center">
-Made with ☕ & ⚙️ by the SSH Vault team
+Made with ☕ & ⚙️ by the Aegis KeyVault team
 </div>
