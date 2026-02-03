@@ -7,8 +7,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN alembic upgrade head || true
-
 EXPOSE 8000
 
-CMD ["uvicorn", "services.aegis.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "alembic upgrade head && uvicorn services.aegis.main:app --host 0.0.0.0 --port 8000"]
