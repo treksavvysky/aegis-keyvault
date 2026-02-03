@@ -138,9 +138,42 @@ def delete_secret(
 
 @secrets_app.command("list")
 def list_secrets() -> None:
-    """List all secrets (names only, not values)."""
-    typer.echo("Note: List endpoint not yet implemented in Aegis API", err=True)
-    raise typer.Exit(1)
+    """List all secrets (names and metadata, not values)."""
+    base_url = get_base_url()
+    admin_token = get_admin_token()
+
+    try:
+        response = httpx.get(
+            f"{base_url}/v1/secrets",
+            headers={"X-Admin-Token": admin_token},
+            timeout=30,
+        )
+    except httpx.ConnectError:
+        typer.echo(f"Error: Could not connect to Aegis at {base_url}", err=True)
+        raise typer.Exit(1)
+
+    if response.status_code == 200:
+        data = response.json()
+        secrets = data.get("secrets", [])
+        if not secrets:
+            typer.echo("No secrets found")
+            return
+
+        # Print table header
+        typer.echo(f"{'NAME':<40} {'RESOURCE':<30} {'CREATED'}")
+        typer.echo("-" * 90)
+        for s in secrets:
+            name = s["name"]
+            resource = s.get("resource") or "-"
+            created = s.get("created_at", "")[:19]  # Trim to datetime without timezone
+            typer.echo(f"{name:<40} {resource:<30} {created}")
+        typer.echo(f"\nTotal: {len(secrets)} secret(s)")
+    elif response.status_code == 401:
+        typer.echo("Error: Invalid admin token", err=True)
+        raise typer.Exit(1)
+    else:
+        typer.echo(f"Error: {response.status_code} - {response.text}", err=True)
+        raise typer.Exit(1)
 
 
 @app.command("health")

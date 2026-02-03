@@ -536,3 +536,25 @@ def delete_secret(
     )
 
     return {"status": "deleted", "name": name}
+
+
+@app.get("/v1/secrets", response_model=schemas.SecretListResponse)
+def list_secrets(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> schemas.SecretListResponse:
+    """List all secrets (names and metadata only, not values)."""
+    require_admin(request)
+
+    secrets = db.query(Secret).filter_by(status="active").order_by(Secret.name).all()
+
+    return schemas.SecretListResponse(
+        secrets=[
+            schemas.SecretListItem(
+                name=s.name,
+                resource=s.resource,
+                created_at=s.created_at.isoformat(),
+            )
+            for s in secrets
+        ]
+    )

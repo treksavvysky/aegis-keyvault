@@ -70,3 +70,13 @@ class SecretRetrieveResponse(BaseModel):
     name: str
     value: str
     resource: str | None
+
+
+class SecretListItem(BaseModel):
+    name: str
+    resource: str | None
+    created_at: str
+
+
+class SecretListResponse(BaseModel):
+    secrets: list[SecretListItem]
