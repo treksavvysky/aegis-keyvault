@@ -42,6 +42,7 @@ ruff format .
 ```
 services/aegis/     # FastAPI service
 ├── main.py         # API endpoints (/v1/keys, /v1/token, /v1/introspect, /v1/revoke/*, /v1/secrets/*)
+├── cli.py          # CLI tool (aegis-cli) for secure secret entry
 ├── models.py       # SQLAlchemy ORM (Principal, ApiKey, AuditEvent, RevokedToken, Secret)
 ├── schemas.py      # Pydantic request/response models
 ├── security.py     # Token minting, API key generation, bcrypt hashing, Fernet encryption
@@ -79,6 +80,31 @@ These rules are enforced throughout the codebase and must never be weakened:
 4. **Audience binding required** — `aud` claim on all tokens; services reject wrong `aud`
 5. **Every privileged action is auditable** — trace_id → token_jti → action → result
 
+## CLI Tool
+
+The `aegis-cli` provides secure secret management without chat exposure:
+
+```bash
+# Configure
+export AEGIS_URL=http://localhost:8001
+export AEGIS_ADMIN_TOKEN=your-admin-token
+
+# Run via python module
+python3 -m services.aegis.cli secrets add ssh-pass:server1 --resource host:server1
+
+# Or create an alias for convenience
+alias aegis-cli='python3 -m services.aegis.cli'
+aegis-cli secrets add ssh-pass:server1 --resource host:server1
+
+# Delete a secret
+aegis-cli secrets delete ssh-pass:server1
+
+# Health check
+aegis-cli health
+```
+
+**Key security feature**: Secret values are entered via `getpass` (no-echo) and never appear in shell history, logs, or chat.
+
 ## Secrets Vault
 
 Aegis includes a token-gated secrets vault for secure credential storage and retrieval:
@@ -89,7 +115,10 @@ Aegis includes a token-gated secrets vault for secure credential storage and ret
 - **Use case**: Charon retrieves SSH passwords from Aegis instead of receiving them through chat
 
 ```bash
-# Store a secret (admin)
+# Store a secret via CLI (recommended - no chat exposure)
+aegis-cli secrets add ssh-pass:server1 --resource host:server1
+
+# Or via API (admin)
 curl -X POST http://localhost:8000/v1/secrets \
   -H "X-Admin-Token: $AEGIS_ADMIN_TOKEN" \
   -d '{"name": "ssh-pass:server1", "value": "password", "resource": "host:server1"}'

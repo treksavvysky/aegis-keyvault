@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -18,6 +18,8 @@ dependencies = [
   "bcrypt>=4.1",
   "pydantic>=2.6",
   "cryptography>=42.0",
+  "typer>=0.9",
+  "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
@@ -37,8 +39,12 @@ quote-style = "double"
 [tool.pytest.ini_options]
 addopts = "-q"
 
-[tool.setuptools]
-packages = ["services", "services.aegis", "libs", "libs.aegis_auth", "aegis_keyvault"]
+[project.scripts]
+aegis-cli = "services.aegis.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["services*", "libs*"]
 
 [tool.setuptools.package-data]
-aegis_keyvault = ["py.typed"]
+"*" = ["py.typed"]
