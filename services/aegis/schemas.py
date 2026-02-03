@@ -35,3 +35,18 @@ class TokenRevokeRequest(BaseModel):
 class KeyRevokeRequest(BaseModel):
     key_id: str
     status: str = "revoked"
+
+
+class IntrospectRequest(BaseModel):
+    expected_aud: str | None = None
+
+
+class IntrospectResponse(BaseModel):
+    active: bool
+    sub: str | None = None
+    aud: str | None = None
+    scopes: list[str] = Field(default_factory=list)
+    exp: int | None = None
+    iat: int | None = None
+    jti: str | None = None
+    reason: str | None = None

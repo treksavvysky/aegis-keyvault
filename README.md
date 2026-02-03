@@ -42,6 +42,7 @@ pytest -q
 
 - `POST /v1/keys` (admin-only) creates a principal + API key. The plaintext key is returned once.
 - `POST /v1/token` mints a short-lived, audience-bound token from an API key.
+- `POST /v1/introspect` (admin-token protected) checks token status without DB access.
 - `POST /v1/revoke/token` revokes a token by `jti`.
 - `POST /v1/revoke/key` disables or revokes an API key.
 
@@ -54,4 +55,14 @@ from libs.aegis_auth import verify_token, require_scopes
 
 claims = verify_token(token, expected_aud="service")
 require_scopes(claims, ["repo.read"])
+```
+
+## Introspection Example
+
+```bash
+curl -X POST http://localhost:8000/v1/introspect \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "X-Admin-Token: $AEGIS_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"expected_aud":"service"}'
 ```
