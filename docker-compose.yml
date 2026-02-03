@@ -1,0 +1,15 @@
+services:
+  aegis:
+    build: .
+    ports:
+      - "8001:8000"
+    env_file:
+      - .env
+    environment:
+      - AEGIS_DATABASE_URL=sqlite:///./data/aegis.db
+    volumes:
+      - aegis-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  aegis-data:
