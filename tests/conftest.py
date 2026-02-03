@@ -18,6 +18,8 @@ from services.aegis.models import Base
 def _set_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AEGIS_SIGNING_KEY", "test-signing-key")
     monkeypatch.setenv("AEGIS_ADMIN_TOKEN", "test-admin-token")
+    # Valid Fernet key for testing (generated via Fernet.generate_key())
+    monkeypatch.setenv("AEGIS_ENCRYPTION_KEY", "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NTY=")
 
 
 @pytest.fixture()

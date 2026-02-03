@@ -11,9 +11,11 @@ from . import schemas
 from .audit import emit_audit_event
 from .config import get_admin_token, get_signing_key
 from .db import get_db
-from .models import ApiKey, Principal, RevokedToken
+from .models import ApiKey, Principal, RevokedToken, Secret
 from .security import (
     TokenError,
+    decrypt_secret,
+    encrypt_secret,
     generate_api_key,
     hash_secret,
     mint_token,
@@ -227,6 +229,7 @@ def mint_access_token(
         aud=payload.aud,
         ttl_seconds=payload.ttl_seconds,
         key_id=api_key.id,
+        resource=payload.resource,
     )
 
     api_key.last_used_at = dt.datetime.now(dt.timezone.utc)
@@ -361,3 +364,175 @@ def revoke_key(
         metadata={"trace_id": request.state.trace_id, "key_id": api_key.id},
     )
     return {"status": api_key.status, "key_id": api_key.id}
+
+
+@app.post("/v1/secrets", response_model=schemas.SecretCreateResponse)
+def create_secret(
+    payload: schemas.SecretCreateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> schemas.SecretCreateResponse:
+    require_admin(request)
+
+    existing = db.query(Secret).filter_by(name=payload.name).first()
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Secret name already exists")
+
+    # Use a system principal for admin-created secrets
+    admin_principal = db.query(Principal).filter_by(name="admin", type="system").first()
+    if not admin_principal:
+        admin_principal = Principal(name="admin", type="system")
+        db.add(admin_principal)
+        db.commit()
+        db.refresh(admin_principal)
+
+    secret = Secret(
+        name=payload.name,
+        value_encrypted=encrypt_secret(payload.value),
+        resource=payload.resource,
+        principal_id=admin_principal.id,
+    )
+    db.add(secret)
+    db.commit()
+    db.refresh(secret)
+
+    emit_audit_event(
+        db,
+        event_type="secret.created",
+        result="ok",
+        principal_id=admin_principal.id,
+        resource=payload.resource,
+        metadata={"trace_id": request.state.trace_id, "secret_name": payload.name},
+    )
+
+    return schemas.SecretCreateResponse(
+        id=secret.id,
+        name=secret.name,
+        resource=secret.resource,
+        created_at=secret.created_at.isoformat(),
+    )
+
+
+@app.get("/v1/secrets/{name}", response_model=schemas.SecretRetrieveResponse)
+def get_secret(
+    name: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> schemas.SecretRetrieveResponse:
+    if credentials is None or not credentials.credentials:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing access token")
+
+    claims, reason = _decode_access_token(credentials.credentials, expected_aud="aegis")
+    if reason:
+        emit_audit_event(
+            db,
+            event_type="secret.denied",
+            result="deny",
+            principal_id=None,
+            metadata={"trace_id": request.state.trace_id, "secret_name": name, "reason": reason},
+        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=reason)
+
+    status_reason = _evaluate_token_status(db, claims or {})
+    if status_reason:
+        emit_audit_event(
+            db,
+            event_type="secret.denied",
+            result="deny",
+            principal_id=claims.get("sub") if claims else None,
+            token_jti=claims.get("jti") if claims else None,
+            metadata={"trace_id": request.state.trace_id, "secret_name": name, "reason": status_reason},
+        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=status_reason)
+
+    if "secrets.read" not in set(claims.get("scopes", [])):
+        emit_audit_event(
+            db,
+            event_type="secret.denied",
+            result="deny",
+            principal_id=claims.get("sub"),
+            token_jti=claims.get("jti"),
+            metadata={"trace_id": request.state.trace_id, "secret_name": name, "reason": "missing scope"},
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Missing scope: secrets.read")
+
+    secret = db.query(Secret).filter_by(name=name, status="active").first()
+    if secret is None:
+        emit_audit_event(
+            db,
+            event_type="secret.denied",
+            result="deny",
+            principal_id=claims.get("sub"),
+            token_jti=claims.get("jti"),
+            metadata={"trace_id": request.state.trace_id, "secret_name": name, "reason": "not found"},
+        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Secret not found")
+
+    # Resource binding check
+    token_resource = claims.get("resource")
+    if secret.resource:
+        if not token_resource or token_resource != secret.resource:
+            emit_audit_event(
+                db,
+                event_type="secret.denied",
+                result="deny",
+                principal_id=claims.get("sub"),
+                token_jti=claims.get("jti"),
+                resource=secret.resource,
+                metadata={
+                    "trace_id": request.state.trace_id,
+                    "secret_name": name,
+                    "reason": "resource mismatch",
+                    "expected": secret.resource,
+                    "got": token_resource,
+                },
+            )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Resource mismatch")
+
+    plaintext = decrypt_secret(secret.value_encrypted)
+
+    emit_audit_event(
+        db,
+        event_type="secret.accessed",
+        result="ok",
+        principal_id=claims.get("sub"),
+        token_jti=claims.get("jti"),
+        resource=secret.resource,
+        metadata={"trace_id": request.state.trace_id, "secret_name": name},
+    )
+
+    return schemas.SecretRetrieveResponse(
+        name=secret.name,
+        value=plaintext,
+        resource=secret.resource,
+    )
+
+
+@app.delete("/v1/secrets/{name}")
+def delete_secret(
+    name: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    require_admin(request)
+
+    secret = db.query(Secret).filter_by(name=name).first()
+    if secret is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Secret not found")
+
+    secret.status = "deleted"
+    secret.updated_at = dt.datetime.now(dt.timezone.utc)
+    db.add(secret)
+    db.commit()
+
+    emit_audit_event(
+        db,
+        event_type="secret.deleted",
+        result="ok",
+        principal_id=None,
+        resource=secret.resource,
+        metadata={"trace_id": request.state.trace_id, "secret_name": name},
+    )
+
+    return {"status": "deleted", "name": name}

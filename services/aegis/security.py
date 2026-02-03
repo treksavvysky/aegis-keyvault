@@ -4,8 +4,9 @@ import uuid
 
 import bcrypt
 import jwt
+from cryptography.fernet import Fernet
 
-from .config import DEFAULT_TTL_SECONDS, MAX_TTL_SECONDS, get_signing_key
+from .config import DEFAULT_TTL_SECONDS, MAX_TTL_SECONDS, get_encryption_key, get_signing_key
 
 
 class TokenError(ValueError):
@@ -26,6 +27,21 @@ def hash_secret(secret: str) -> str:
 
 def verify_secret(secret: str, hashed: str) -> bool:
     return bcrypt.checkpw(secret.encode("utf-8"), hashed.encode("utf-8"))
+
+
+def get_cipher() -> Fernet:
+    """Get Fernet cipher for secret encryption/decryption."""
+    return Fernet(get_encryption_key())
+
+
+def encrypt_secret(plaintext: str) -> str:
+    """Encrypt a secret value for storage."""
+    return get_cipher().encrypt(plaintext.encode()).decode()
+
+
+def decrypt_secret(ciphertext: str) -> str:
+    """Decrypt a secret value from storage."""
+    return get_cipher().decrypt(ciphertext.encode()).decode()
 
 
 def parse_api_key(raw_key: str) -> tuple[str, str]:
@@ -62,6 +78,7 @@ def mint_token(
     ttl_seconds: int | None,
     *,
     key_id: str | None = None,
+    resource: str | None = None,
 ) -> tuple[str, str, int]:
     iat, exp, ttl = compute_exp(ttl_seconds)
     jti = str(uuid.uuid4())
@@ -75,5 +92,7 @@ def mint_token(
     }
     if key_id:
         payload["key_id"] = key_id
+    if resource:
+        payload["resource"] = resource
     token = jwt.encode(payload, get_signing_key(), algorithm="HS256")
     return token, jti, ttl

@@ -18,6 +18,7 @@ class TokenRequest(BaseModel):
     aud: str | None = None
     scopes: list[str] = Field(default_factory=list)
     ttl_seconds: int | None = None
+    resource: str | None = None
 
 
 class TokenResponse(BaseModel):
@@ -50,3 +51,22 @@ class IntrospectResponse(BaseModel):
     iat: int | None = None
     jti: str | None = None
     reason: str | None = None
+
+
+class SecretCreateRequest(BaseModel):
+    name: str
+    value: str
+    resource: str | None = None
+
+
+class SecretCreateResponse(BaseModel):
+    id: str
+    name: str
+    resource: str | None
+    created_at: str
+
+
+class SecretRetrieveResponse(BaseModel):
+    name: str
+    value: str
+    resource: str | None

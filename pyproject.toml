@@ -17,6 +17,7 @@ dependencies = [
   "pyjwt>=2.8",
   "bcrypt>=4.1",
   "pydantic>=2.6",
+  "cryptography>=42.0",
 ]
 
 [project.optional-dependencies]

@@ -6,6 +6,7 @@ PyJWT>=2.8
 bcrypt
 pydantic
 python-dotenv
+cryptography
 pytest
 httpx
 freezegun

@@ -21,5 +21,13 @@ def get_admin_token() -> str:
     return token
 
 
+def get_encryption_key() -> bytes:
+    """Get Fernet encryption key for secrets storage."""
+    key = os.getenv("AEGIS_ENCRYPTION_KEY")
+    if not key:
+        raise RuntimeError("AEGIS_ENCRYPTION_KEY is required for secrets vault")
+    return key.encode()
+
+
 DEFAULT_TTL_SECONDS = 900
 MAX_TTL_SECONDS = 1800
