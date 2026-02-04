@@ -35,6 +35,10 @@ pytest tests/test_token_flow.py::test_mint_token_success -v  # Single test
 # Lint
 ruff check .
 ruff format .
+
+# Docker deployment
+docker compose up -d                # Run on port 8001 (persists data to volume)
+docker compose logs -f aegis        # View logs
 ```
 
 ## Architecture
@@ -89,17 +93,10 @@ The `aegis-cli` provides secure secret management without chat exposure:
 export AEGIS_URL=http://localhost:8001
 export AEGIS_ADMIN_TOKEN=your-admin-token
 
-# Run via python module
-python3 -m services.aegis.cli secrets add ssh-pass:server1 --resource host:server1
-
-# Or create an alias for convenience
-alias aegis-cli='python3 -m services.aegis.cli'
+# After pip install -e ., the CLI is available as:
 aegis-cli secrets add ssh-pass:server1 --resource host:server1
-
-# Delete a secret
+aegis-cli secrets list
 aegis-cli secrets delete ssh-pass:server1
-
-# Health check
 aegis-cli health
 ```
 
@@ -141,6 +138,20 @@ curl http://localhost:8000/v1/secrets/ssh-pass:server1 \
 - **TTL bounds**: 1–1800 seconds (enforced in `security.py:compute_exp()`)
 - **Trace propagation**: `X-Trace-Id` header flows through to audit metadata
 - **Error responses**: 401 for auth failures, 403 for permission/scope/resource failures
+
+## Verification Library
+
+Downstream services use `libs/aegis_auth` to verify tokens:
+
+```python
+from libs.aegis_auth import verify_token, require_scopes, VerificationError
+
+try:
+    claims = verify_token(token, expected_aud="my-service")
+    require_scopes(claims, ["repo.read"])
+except VerificationError as e:
+    # Handle invalid/expired/revoked token
+```
 
 ## Testing
 
