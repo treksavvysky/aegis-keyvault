@@ -22,7 +22,7 @@ def test_mint_token_success(client, db_session):
     response = client.post(
         "/v1/token",
         headers={"Authorization": f"Bearer {api_key}"},
-        json={"aud": "svc", "scopes": ["repo.read"], "ttl_seconds": 60},
+        json={"aud": "svc", "scopes": ["repo.read"], "ttl_seconds": 60, "resource": "host:test"},
     )
     assert response.status_code == 200
     data = response.json()
@@ -39,7 +39,7 @@ def test_mint_denied_for_disallowed_scope(client, db_session):
     response = client.post(
         "/v1/token",
         headers={"Authorization": f"Bearer {api_key}"},
-        json={"aud": "svc", "scopes": ["repo.write"]},
+        json={"aud": "svc", "scopes": ["repo.write"], "resource": "host:test", "ttl_seconds": 60},
     )
     assert response.status_code == 403
     events = db_session.query(AuditEvent).filter_by(event_type="token.denied").all()
@@ -63,7 +63,7 @@ def test_verify_fails_for_wrong_aud(client):
     response = client.post(
         "/v1/token",
         headers={"Authorization": f"Bearer {api_key}"},
-        json={"aud": "svc", "scopes": ["repo.read"], "ttl_seconds": 60},
+        json={"aud": "svc", "scopes": ["repo.read"], "ttl_seconds": 60, "resource": "host:test"},
     )
     token = response.json()["access_token"]
     with pytest.raises(VerificationError):
@@ -76,7 +76,7 @@ def test_verify_fails_for_expired_token(client):
         response = client.post(
             "/v1/token",
             headers={"Authorization": f"Bearer {api_key}"},
-            json={"aud": "svc", "scopes": ["repo.read"], "ttl_seconds": 1},
+            json={"aud": "svc", "scopes": ["repo.read"], "ttl_seconds": 1, "resource": "host:test"},
         )
         token = response.json()["access_token"]
         with freeze_time(dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=120)):
@@ -89,7 +89,7 @@ def test_revoked_jti_rejected(client, db_session):
     response = client.post(
         "/v1/token",
         headers={"Authorization": f"Bearer {api_key}"},
-        json={"aud": "svc", "scopes": ["repo.read"], "ttl_seconds": 60},
+        json={"aud": "svc", "scopes": ["repo.read"], "ttl_seconds": 60, "resource": "host:test"},
     )
     data = response.json()
     revoke = client.post(
@@ -108,7 +108,7 @@ def test_audit_events_emitted_for_revoke(client, db_session):
     response = client.post(
         "/v1/token",
         headers={"Authorization": f"Bearer {api_key}"},
-        json={"aud": "svc", "scopes": ["repo.read"], "ttl_seconds": 60},
+        json={"aud": "svc", "scopes": ["repo.read"], "ttl_seconds": 60, "resource": "host:test"},
     )
     data = response.json()
     client.post(
@@ -130,9 +130,63 @@ def test_require_scopes(client):
     response = client.post(
         "/v1/token",
         headers={"Authorization": f"Bearer {api_key}"},
-        json={"aud": "svc", "scopes": ["repo.read"], "ttl_seconds": 60},
+        json={"aud": "svc", "scopes": ["repo.read"], "ttl_seconds": 60, "resource": "host:test"},
     )
     claims = verify_token(response.json()["access_token"], expected_aud="svc")
     require_scopes(claims, ["repo.read"])
     with pytest.raises(VerificationError):
         require_scopes(claims, ["repo.write"])
+
+
+def test_mint_denied_when_scopes_empty(client, db_session):
+    """Empty scopes list is rejected."""
+    api_key, _, _ = _create_key(client)
+    response = client.post(
+        "/v1/token",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={"aud": "svc", "scopes": [], "resource": "host:test", "ttl_seconds": 60},
+    )
+    assert response.status_code == 400
+    assert "scopes required" in response.json()["detail"]
+    events = db_session.query(AuditEvent).filter_by(event_type="token.denied").all()
+    assert len(events) == 1
+
+
+def test_mint_denied_when_resource_missing(client, db_session):
+    """Missing resource is rejected."""
+    api_key, _, _ = _create_key(client)
+    response = client.post(
+        "/v1/token",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={"aud": "svc", "scopes": ["repo.read"], "ttl_seconds": 60},
+    )
+    assert response.status_code == 400
+    assert "resource required" in response.json()["detail"]
+    events = db_session.query(AuditEvent).filter_by(event_type="token.denied").all()
+    assert len(events) == 1
+
+
+def test_mint_denied_when_ttl_seconds_missing(client, db_session):
+    """Missing ttl_seconds is rejected."""
+    api_key, _, _ = _create_key(client)
+    response = client.post(
+        "/v1/token",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={"aud": "svc", "scopes": ["repo.read"], "resource": "host:test"},
+    )
+    assert response.status_code == 400
+    assert "ttl_seconds required" in response.json()["detail"]
+    events = db_session.query(AuditEvent).filter_by(event_type="token.denied").all()
+    assert len(events) == 1
+
+
+def test_mint_denied_scopes_missing_from_payload(client, db_session):
+    """Omitting scopes field entirely (Pydantic default []) is also rejected."""
+    api_key, _, _ = _create_key(client)
+    response = client.post(
+        "/v1/token",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={"aud": "svc", "resource": "host:test", "ttl_seconds": 60},
+    )
+    assert response.status_code == 400
+    assert "scopes required" in response.json()["detail"]

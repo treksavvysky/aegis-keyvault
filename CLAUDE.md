@@ -86,7 +86,8 @@ These rules are enforced throughout the codebase and must never be weakened:
 2. **Tokens are short-lived** (default 15m, hard max 30m)
 3. **Deny-by-default** — explicit scope allowlists only
 4. **Audience binding required** — `aud` claim on all tokens; services reject wrong `aud`
-5. **Every privileged action is auditable** — trace_id → token_jti → action → result
+5. **All token fields mandatory** — `aud`, `scopes`, `resource`, `ttl_seconds` required at mint time (400 if missing)
+6. **Every privileged action is auditable** — trace_id → token_jti → action → result
 
 ## CLI Tool
 
@@ -172,6 +173,12 @@ Tests use pytest with in-memory SQLite (`conftest.py` handles fixtures). Time-se
 - **Phase 0** — Minimal safe injection: CLI with no-echo `getpass` input
 - **Phase 1** — Human-proofing: Rotation endpoint, confirmation prompts, metadata-only responses
 - **Phase 2** — Operational maturity: Secret types (`password`, `ssh-private-key`, `api-token`), `--from-file` flag
+
+**Roadmap (AuthZ hardening)** — see `docs/ROADMAP.md`:
+- **Phase 0** (Core Correctness) — COMPLETE: All token fields mandatory, empty scopes rejected, resource_unbound audit flag
+- **Phase 1** (Trust Boundaries) — Principal policy ceiling, scope/resource restrictions at principal level
+- **Phase 2** (Delegation) — Token exchange for job-scoped authority without standing privilege
+- **Phase 3** (Audit + Rotation) — Audit query API, signing/encryption key rotation
 
 **Deferred features** (see `docs/DEFERRED.md`):
 - SSH private key format validation (PEM checks)

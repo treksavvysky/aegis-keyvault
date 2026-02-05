@@ -19,7 +19,12 @@ def _mint_token(client, api_key, aud="svc", ttl_seconds=60):
     response = client.post(
         "/v1/token",
         headers={"Authorization": f"Bearer {api_key}"},
-        json={"aud": aud, "scopes": ["repo.read"], "ttl_seconds": ttl_seconds},
+        json={
+            "aud": aud,
+            "scopes": ["repo.read"],
+            "ttl_seconds": ttl_seconds,
+            "resource": "host:test",
+        },
     )
     assert response.status_code == 200
     return response.json()

@@ -54,6 +54,8 @@ def parse_api_key(raw_key: str) -> tuple[str, str]:
 
 
 def validate_scopes(scopes: list[str]) -> None:
+    if not scopes:
+        raise TokenError("scopes required")
     if any(scope.strip() == "*" for scope in scopes):
         raise TokenError("Wildcard scopes are not allowed")
     if any(not scope or scope.strip() == "" for scope in scopes):

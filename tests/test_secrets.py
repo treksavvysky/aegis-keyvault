@@ -23,9 +23,9 @@ def _mint_token(client, api_key, scopes=None, resource=None):
     """Mint a token with specified scopes and resource."""
     if scopes is None:
         scopes = ["secrets.read"]
-    payload = {"aud": "aegis", "scopes": scopes}
-    if resource:
-        payload["resource"] = resource
+    if resource is None:
+        resource = "any:default"
+    payload = {"aud": "aegis", "scopes": scopes, "ttl_seconds": 300, "resource": resource}
     response = client.post(
         "/v1/token",
         headers={"Authorization": f"Bearer {api_key}"},
@@ -195,8 +195,8 @@ def test_get_secret_resource_mismatch(client, db_session):
     assert len(events) == 1
 
 
-def test_get_secret_no_resource_in_token(client, db_session):
-    """Test that token without resource cannot access resource-bound secret."""
+def test_get_secret_wrong_resource_in_token(client, db_session):
+    """Test that token with non-matching resource cannot access resource-bound secret."""
     # Create secret with resource binding
     client.post(
         "/v1/secrets",
@@ -204,11 +204,11 @@ def test_get_secret_no_resource_in_token(client, db_session):
         json={"name": "bound-secret", "value": "secret", "resource": "host:test"},
     )
 
-    # Get token without resource
+    # Get token with different resource
     api_key, _ = _create_key(client, scopes=["secrets.read"])
-    token = _mint_token(client, api_key, scopes=["secrets.read"])  # no resource
+    token = _mint_token(client, api_key, scopes=["secrets.read"], resource="host:other")
 
-    # Attempt retrieval
+    # Attempt retrieval — should fail with resource mismatch
     response = client.get(
         "/v1/secrets/bound-secret",
         headers={"Authorization": f"Bearer {token}"},
@@ -254,7 +254,12 @@ def test_get_secret_expired_token(client, db_session):
         response = client.post(
             "/v1/token",
             headers={"Authorization": f"Bearer {api_key}"},
-            json={"aud": "aegis", "scopes": ["secrets.read"], "ttl_seconds": 1},
+            json={
+                "aud": "aegis",
+                "scopes": ["secrets.read"],
+                "ttl_seconds": 1,
+                "resource": "any:default",
+            },
         )
         token = response.json()["access_token"]
 
@@ -350,7 +355,12 @@ def test_token_with_resource_claim(client, db_session):
     response = client.post(
         "/v1/token",
         headers={"Authorization": f"Bearer {api_key}"},
-        json={"aud": "aegis", "scopes": ["secrets.read"], "resource": "host:test-server"},
+        json={
+            "aud": "aegis",
+            "scopes": ["secrets.read"],
+            "resource": "host:test-server",
+            "ttl_seconds": 300,
+        },
     )
     assert response.status_code == 200
 
@@ -434,3 +444,92 @@ def test_rotate_deleted_secret_fails(client, db_session):
         json={"value": "new"},
     )
     assert response.status_code == 404
+
+
+def test_secret_read_impossible_without_secrets_read_scope(client, db_session):
+    """Even with matching resource, missing secrets.read scope blocks access."""
+    client.post(
+        "/v1/secrets",
+        headers={"X-Admin-Token": "test-admin-token"},
+        json={"name": "proof-secret", "value": "classified", "resource": "host:target"},
+    )
+    api_key, _ = _create_key(client, scopes=["repo.read"])
+    token = _mint_token(client, api_key, scopes=["repo.read"], resource="host:target")
+    response = client.get(
+        "/v1/secrets/proof-secret",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 403
+    assert "secrets.read" in response.json()["detail"]
+
+
+def test_secret_read_impossible_without_matching_resource(client, db_session):
+    """secrets.read scope with wrong resource blocks access."""
+    client.post(
+        "/v1/secrets",
+        headers={"X-Admin-Token": "test-admin-token"},
+        json={"name": "resource-proof", "value": "classified", "resource": "host:alpha"},
+    )
+    api_key, _ = _create_key(client, scopes=["secrets.read"])
+    token = _mint_token(client, api_key, scopes=["secrets.read"], resource="host:beta")
+    response = client.get(
+        "/v1/secrets/resource-proof",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 403
+    assert "Resource mismatch" in response.json()["detail"]
+
+
+def test_secret_read_requires_both_scope_and_resource(client, db_session):
+    """Only secrets.read + matching resource grants access."""
+    client.post(
+        "/v1/secrets",
+        headers={"X-Admin-Token": "test-admin-token"},
+        json={"name": "full-proof", "value": "success", "resource": "host:exact"},
+    )
+    api_key, _ = _create_key(client, scopes=["secrets.read"])
+    token = _mint_token(client, api_key, scopes=["secrets.read"], resource="host:exact")
+    response = client.get(
+        "/v1/secrets/full-proof",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["value"] == "success"
+
+
+def test_unbound_secret_audit_includes_resource_unbound(client, db_session):
+    """Accessing an unbound secret logs resource_unbound: True in audit metadata."""
+    client.post(
+        "/v1/secrets",
+        headers={"X-Admin-Token": "test-admin-token"},
+        json={"name": "unbound-audit", "value": "test"},
+    )
+    api_key, _ = _create_key(client, scopes=["secrets.read"])
+    token = _mint_token(client, api_key)
+    response = client.get(
+        "/v1/secrets/unbound-audit",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    events = db_session.query(AuditEvent).filter_by(event_type="secret.accessed").all()
+    assert len(events) == 1
+    assert events[0].metadata_json.get("resource_unbound") is True
+
+
+def test_bound_secret_audit_no_resource_unbound(client, db_session):
+    """Accessing a resource-bound secret does NOT have resource_unbound in metadata."""
+    client.post(
+        "/v1/secrets",
+        headers={"X-Admin-Token": "test-admin-token"},
+        json={"name": "bound-audit", "value": "test", "resource": "host:x"},
+    )
+    api_key, _ = _create_key(client, scopes=["secrets.read"])
+    token = _mint_token(client, api_key, resource="host:x")
+    response = client.get(
+        "/v1/secrets/bound-audit",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    events = db_session.query(AuditEvent).filter_by(event_type="secret.accessed").all()
+    assert len(events) == 1
+    assert "resource_unbound" not in events[0].metadata_json

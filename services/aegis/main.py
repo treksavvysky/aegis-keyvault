@@ -199,6 +199,36 @@ def mint_access_token(
         )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="aud required")
 
+    if not payload.scopes:
+        emit_audit_event(
+            db,
+            event_type="token.denied",
+            result="deny",
+            principal_id=api_key.principal_id,
+            metadata={"trace_id": request.state.trace_id, "reason": "scopes required"},
+        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="scopes required")
+
+    if not payload.resource:
+        emit_audit_event(
+            db,
+            event_type="token.denied",
+            result="deny",
+            principal_id=api_key.principal_id,
+            metadata={"trace_id": request.state.trace_id, "reason": "resource required"},
+        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="resource required")
+
+    if payload.ttl_seconds is None:
+        emit_audit_event(
+            db,
+            event_type="token.denied",
+            result="deny",
+            principal_id=api_key.principal_id,
+            metadata={"trace_id": request.state.trace_id, "reason": "ttl_seconds required"},
+        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ttl_seconds required")
+
     requested_scopes = payload.scopes
     try:
         validate_scopes(requested_scopes)
@@ -494,6 +524,10 @@ def get_secret(
 
     plaintext = decrypt_secret(secret.value_encrypted)
 
+    access_metadata = {"trace_id": request.state.trace_id, "secret_name": name}
+    if not secret.resource:
+        access_metadata["resource_unbound"] = True
+
     emit_audit_event(
         db,
         event_type="secret.accessed",
@@ -501,7 +535,7 @@ def get_secret(
         principal_id=claims.get("sub"),
         token_jti=claims.get("jti"),
         resource=secret.resource,
-        metadata={"trace_id": request.state.trace_id, "secret_name": name},
+        metadata=access_metadata,
     )
 
     return schemas.SecretRetrieveResponse(
