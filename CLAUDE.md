@@ -59,6 +59,8 @@ libs/aegis_auth/    # Verification library for downstream services
 
 migrations/         # Alembic migrations
 tests/              # pytest suite with in-memory SQLite
+docs/               # Documentation
+└── DEFERRED.md     # Deferred features and design notes
 ```
 
 ## Key Endpoints
@@ -163,3 +165,14 @@ except VerificationError as e:
 ## Testing
 
 Tests use pytest with in-memory SQLite (`conftest.py` handles fixtures). Time-sensitive tests use `freezegun` for deterministic expiry behavior. Required test coverage includes token mint success/deny, scope validation, audience verification, expiry, and revocation.
+
+## Development Status
+
+**Completed Phases:**
+- **Phase 0** — Minimal safe injection: CLI with no-echo `getpass` input
+- **Phase 1** — Human-proofing: Rotation endpoint, confirmation prompts, metadata-only responses
+- **Phase 2** — Operational maturity: Secret types (`password`, `ssh-private-key`, `api-token`), `--from-file` flag
+
+**Deferred features** (see `docs/DEFERRED.md`):
+- SSH private key format validation (PEM checks)
+- Client-side encryption (belt + suspenders)
