@@ -314,3 +314,80 @@ def test_token_with_resource_claim(client, db_session):
     # Verify the token was minted with resource (check audit)
     events = db_session.query(AuditEvent).filter_by(event_type="token.minted").all()
     assert len(events) == 1
+
+
+def test_rotate_secret_success(client, db_session):
+    """Test rotating a secret's value."""
+    # Create secret
+    client.post(
+        "/v1/secrets",
+        headers={"X-Admin-Token": "test-admin-token"},
+        json={"name": "rotate-test", "value": "old-password", "resource": "host:srv1"},
+    )
+
+    # Rotate secret
+    response = client.put(
+        "/v1/secrets/rotate-test",
+        headers={"X-Admin-Token": "test-admin-token"},
+        json={"value": "new-password"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["name"] == "rotate-test"
+    assert data["resource"] == "host:srv1"
+    assert "rotated_at" in data
+
+    # Verify the new value is retrievable
+    api_key, _ = _create_key(client, scopes=["secrets.read"])
+    token = _mint_token(client, api_key, scopes=["secrets.read"], resource="host:srv1")
+    response = client.get(
+        "/v1/secrets/rotate-test",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["value"] == "new-password"
+
+    # Verify audit event
+    events = db_session.query(AuditEvent).filter_by(event_type="secret.rotated").all()
+    assert len(events) == 1
+
+
+def test_rotate_secret_not_found(client):
+    """Test rotating a non-existent secret returns 404."""
+    response = client.put(
+        "/v1/secrets/nonexistent",
+        headers={"X-Admin-Token": "test-admin-token"},
+        json={"value": "new-value"},
+    )
+    assert response.status_code == 404
+
+
+def test_rotate_secret_requires_admin(client):
+    """Test that rotating secrets requires admin token."""
+    response = client.put(
+        "/v1/secrets/any",
+        json={"value": "new-value"},
+    )
+    assert response.status_code == 401
+
+
+def test_rotate_deleted_secret_fails(client, db_session):
+    """Test that rotating a deleted secret returns 404."""
+    # Create and delete secret
+    client.post(
+        "/v1/secrets",
+        headers={"X-Admin-Token": "test-admin-token"},
+        json={"name": "deleted-rotate", "value": "old"},
+    )
+    client.delete(
+        "/v1/secrets/deleted-rotate",
+        headers={"X-Admin-Token": "test-admin-token"},
+    )
+
+    # Attempt rotation
+    response = client.put(
+        "/v1/secrets/deleted-rotate",
+        headers={"X-Admin-Token": "test-admin-token"},
+        json={"value": "new"},
+    )
+    assert response.status_code == 404

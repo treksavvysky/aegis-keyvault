@@ -80,3 +80,13 @@ class SecretListItem(BaseModel):
 
 class SecretListResponse(BaseModel):
     secrets: list[SecretListItem]
+
+
+class SecretRotateRequest(BaseModel):
+    value: str
+
+
+class SecretRotateResponse(BaseModel):
+    name: str
+    resource: str | None
+    rotated_at: str

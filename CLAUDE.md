@@ -71,7 +71,9 @@ tests/              # pytest suite with in-memory SQLite
 | POST | `/v1/revoke/token` | Revoke token by jti | X-Admin-Token |
 | POST | `/v1/revoke/key` | Disable/revoke API key | X-Admin-Token |
 | POST | `/v1/secrets` | Store encrypted secret | X-Admin-Token |
+| GET | `/v1/secrets` | List secrets (metadata only) | X-Admin-Token |
 | GET | `/v1/secrets/{name}` | Retrieve secret (resource-bound) | Bearer token with `secrets.read` scope |
+| PUT | `/v1/secrets/{name}` | Rotate secret value | X-Admin-Token |
 | DELETE | `/v1/secrets/{name}` | Soft-delete secret | X-Admin-Token |
 
 ## Non-Negotiable Security Invariants
@@ -96,6 +98,7 @@ export AEGIS_ADMIN_TOKEN=your-admin-token
 # After pip install -e ., the CLI is available as:
 aegis-cli secrets add ssh-pass:server1 --resource host:server1
 aegis-cli secrets list
+aegis-cli secrets rotate ssh-pass:server1   # Atomic value rotation
 aegis-cli secrets delete ssh-pass:server1
 aegis-cli health
 ```

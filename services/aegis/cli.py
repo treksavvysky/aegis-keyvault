@@ -2,7 +2,6 @@
 
 import getpass
 import os
-import sys
 
 import httpx
 import typer
@@ -125,6 +124,98 @@ def delete_secret(
 
     if response.status_code == 200:
         typer.echo(f"✓ Secret '{name}' deleted")
+    elif response.status_code == 404:
+        typer.echo(f"Error: Secret '{name}' not found", err=True)
+        raise typer.Exit(1)
+    elif response.status_code == 401:
+        typer.echo("Error: Invalid admin token", err=True)
+        raise typer.Exit(1)
+    else:
+        typer.echo(f"Error: {response.status_code} - {response.text}", err=True)
+        raise typer.Exit(1)
+
+
+@secrets_app.command("rotate")
+def rotate_secret(
+    name: str = typer.Argument(..., help="Secret name to rotate"),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
+) -> None:
+    """
+    Rotate a secret's value.
+
+    The new value is prompted interactively (no echo) and never printed or logged.
+    Shows current metadata before confirming the rotation.
+
+    Example:
+        aegis-cli secrets rotate ssh-pass:server1
+    """
+    base_url = get_base_url()
+    admin_token = get_admin_token()
+
+    # First, fetch current metadata to show user what they're rotating
+    try:
+        list_response = httpx.get(
+            f"{base_url}/v1/secrets",
+            headers={"X-Admin-Token": admin_token},
+            timeout=30,
+        )
+    except httpx.ConnectError:
+        typer.echo(f"Error: Could not connect to Aegis at {base_url}", err=True)
+        raise typer.Exit(1)
+
+    if list_response.status_code != 200:
+        typer.echo(f"Error: {list_response.status_code} - {list_response.text}", err=True)
+        raise typer.Exit(1)
+
+    secrets = list_response.json().get("secrets", [])
+    current = next((s for s in secrets if s["name"] == name), None)
+    if current is None:
+        typer.echo(f"Error: Secret '{name}' not found", err=True)
+        raise typer.Exit(1)
+
+    # Show metadata and confirm
+    typer.echo(f"Secret: {current['name']}")
+    if current.get("resource"):
+        typer.echo(f"Resource: {current['resource']}")
+    typer.echo(f"Created: {current.get('created_at', 'unknown')[:19]}")
+
+    if not force:
+        confirm = typer.confirm(f"\nRotate secret '{name}'?")
+        if not confirm:
+            typer.echo("Aborted")
+            raise typer.Exit(0)
+
+    # Prompt for new value (no echo)
+    try:
+        value = getpass.getpass("\nEnter new secret value: ")
+        if not value:
+            typer.echo("Error: Secret value cannot be empty", err=True)
+            raise typer.Exit(1)
+
+        confirm_value = getpass.getpass("Confirm new secret value: ")
+        if value != confirm_value:
+            typer.echo("Error: Values do not match", err=True)
+            raise typer.Exit(1)
+    except KeyboardInterrupt:
+        typer.echo("\nAborted")
+        raise typer.Exit(1)
+
+    # Send rotation request
+    try:
+        response = httpx.put(
+            f"{base_url}/v1/secrets/{name}",
+            json={"value": value},
+            headers={"X-Admin-Token": admin_token, "Content-Type": "application/json"},
+            timeout=30,
+        )
+    except httpx.ConnectError:
+        typer.echo(f"Error: Could not connect to Aegis at {base_url}", err=True)
+        raise typer.Exit(1)
+
+    if response.status_code == 200:
+        data = response.json()
+        typer.echo(f"✓ Secret '{data['name']}' rotated")
+        typer.echo(f"  Rotated at: {data['rotated_at'][:19]}")
     elif response.status_code == 404:
         typer.echo(f"Error: Secret '{name}' not found", err=True)
         raise typer.Exit(1)

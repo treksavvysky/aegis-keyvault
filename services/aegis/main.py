@@ -538,6 +538,42 @@ def delete_secret(
     return {"status": "deleted", "name": name}
 
 
+@app.put("/v1/secrets/{name}", response_model=schemas.SecretRotateResponse)
+def rotate_secret(
+    name: str,
+    payload: schemas.SecretRotateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> schemas.SecretRotateResponse:
+    """Rotate a secret's value atomically."""
+    require_admin(request)
+
+    secret = db.query(Secret).filter_by(name=name, status="active").first()
+    if secret is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Secret not found")
+
+    secret.value_encrypted = encrypt_secret(payload.value)
+    secret.updated_at = dt.datetime.now(dt.timezone.utc)
+    db.add(secret)
+    db.commit()
+    db.refresh(secret)
+
+    emit_audit_event(
+        db,
+        event_type="secret.rotated",
+        result="ok",
+        principal_id=None,
+        resource=secret.resource,
+        metadata={"trace_id": request.state.trace_id, "secret_name": name},
+    )
+
+    return schemas.SecretRotateResponse(
+        name=secret.name,
+        resource=secret.resource,
+        rotated_at=secret.updated_at.isoformat(),
+    )
+
+
 @app.get("/v1/secrets", response_model=schemas.SecretListResponse)
 def list_secrets(
     request: Request,
