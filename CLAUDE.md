@@ -97,6 +97,8 @@ export AEGIS_ADMIN_TOKEN=your-admin-token
 
 # After pip install -e ., the CLI is available as:
 aegis-cli secrets add ssh-pass:server1 --resource host:server1
+aegis-cli secrets add mykey --type ssh-private-key --from-file ~/.ssh/id_rsa
+aegis-cli secrets add github-token --type api-token
 aegis-cli secrets list
 aegis-cli secrets rotate ssh-pass:server1   # Atomic value rotation
 aegis-cli secrets delete ssh-pass:server1
@@ -110,8 +112,10 @@ aegis-cli health
 Aegis includes a token-gated secrets vault for secure credential storage and retrieval:
 
 - **Encrypted storage**: Secrets are Fernet-encrypted at rest (requires `AEGIS_ENCRYPTION_KEY`)
+- **Secret types**: `password` (default), `ssh-private-key`, `api-token` (metadata only, no validation)
 - **Resource binding**: Secrets can be bound to a resource (e.g., `host:dev-server-1`)
 - **Token-gated access**: Retrieval requires a token with `secrets.read` scope and matching resource
+- **File input**: Use `--from-file` to read multiline secrets (SSH keys) from files
 - **Use case**: Charon retrieves SSH passwords from Aegis instead of receiving them through chat
 
 ```bash

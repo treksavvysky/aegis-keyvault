@@ -56,12 +56,14 @@ class IntrospectResponse(BaseModel):
 class SecretCreateRequest(BaseModel):
     name: str
     value: str
+    secret_type: str = "password"  # password, ssh-private-key, api-token
     resource: str | None = None
 
 
 class SecretCreateResponse(BaseModel):
     id: str
     name: str
+    secret_type: str
     resource: str | None
     created_at: str
 
@@ -69,11 +71,13 @@ class SecretCreateResponse(BaseModel):
 class SecretRetrieveResponse(BaseModel):
     name: str
     value: str
+    secret_type: str
     resource: str | None
 
 
 class SecretListItem(BaseModel):
     name: str
+    secret_type: str
     resource: str | None
     created_at: str
 

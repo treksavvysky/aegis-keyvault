@@ -46,11 +46,33 @@ def test_create_secret_success(client, db_session):
     data = response.json()
     assert data["name"] == "ssh-pass:server1"
     assert data["resource"] == "host:server1"
+    assert data["secret_type"] == "password"  # default type
     assert "id" in data
 
     # Verify audit event
     events = db_session.query(AuditEvent).filter_by(event_type="secret.created").all()
     assert len(events) == 1
+
+
+def test_create_secret_with_type(client, db_session):
+    """Test creating secrets with different types."""
+    # SSH private key
+    response = client.post(
+        "/v1/secrets",
+        headers={"X-Admin-Token": "test-admin-token"},
+        json={"name": "ssh-key:server1", "value": "-----BEGIN RSA PRIVATE KEY-----\n...", "secret_type": "ssh-private-key"},
+    )
+    assert response.status_code == 200
+    assert response.json()["secret_type"] == "ssh-private-key"
+
+    # API token
+    response = client.post(
+        "/v1/secrets",
+        headers={"X-Admin-Token": "test-admin-token"},
+        json={"name": "github-token", "value": "ghp_xxx", "secret_type": "api-token"},
+    )
+    assert response.status_code == 200
+    assert response.json()["secret_type"] == "api-token"
 
 
 def test_create_secret_duplicate_name(client, db_session):
@@ -98,10 +120,31 @@ def test_get_secret_success(client, db_session):
     )
     assert response.status_code == 200
     assert response.json()["value"] == "password123"
+    assert response.json()["secret_type"] == "password"
 
     # Verify audit event
     events = db_session.query(AuditEvent).filter_by(event_type="secret.accessed").all()
     assert len(events) == 1
+
+
+def test_get_secret_preserves_type(client, db_session):
+    """Test that secret type is preserved on retrieval."""
+    # Create SSH key secret
+    client.post(
+        "/v1/secrets",
+        headers={"X-Admin-Token": "test-admin-token"},
+        json={"name": "ssh-key", "value": "key-content", "secret_type": "ssh-private-key"},
+    )
+
+    api_key, _ = _create_key(client, scopes=["secrets.read"])
+    token = _mint_token(client, api_key)
+
+    response = client.get(
+        "/v1/secrets/ssh-key",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["secret_type"] == "ssh-private-key"
 
 
 def test_get_secret_with_resource_binding(client, db_session):

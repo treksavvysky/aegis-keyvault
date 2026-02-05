@@ -389,6 +389,7 @@ def create_secret(
     secret = Secret(
         name=payload.name,
         value_encrypted=encrypt_secret(payload.value),
+        secret_type=payload.secret_type,
         resource=payload.resource,
         principal_id=admin_principal.id,
     )
@@ -408,6 +409,7 @@ def create_secret(
     return schemas.SecretCreateResponse(
         id=secret.id,
         name=secret.name,
+        secret_type=secret.secret_type,
         resource=secret.resource,
         created_at=secret.created_at.isoformat(),
     )
@@ -505,6 +507,7 @@ def get_secret(
     return schemas.SecretRetrieveResponse(
         name=secret.name,
         value=plaintext,
+        secret_type=secret.secret_type,
         resource=secret.resource,
     )
 
@@ -588,6 +591,7 @@ def list_secrets(
         secrets=[
             schemas.SecretListItem(
                 name=s.name,
+                secret_type=s.secret_type,
                 resource=s.resource,
                 created_at=s.created_at.isoformat(),
             )
