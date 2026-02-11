@@ -45,9 +45,9 @@ docker compose logs -f aegis        # View logs
 
 ```
 services/aegis/     # FastAPI service
-├── main.py         # API endpoints (/v1/keys, /v1/token, /v1/introspect, /v1/revoke/*, /v1/secrets/*)
+├── main.py         # API endpoints (/v1/keys, /v1/token, /v1/introspect, /v1/revoke/*, /v1/secrets/*, /v1/principals/*)
 ├── cli.py          # CLI tool (aegis-cli) for secure secret entry
-├── models.py       # SQLAlchemy ORM (Principal, ApiKey, AuditEvent, RevokedToken, Secret)
+├── models.py       # SQLAlchemy ORM (Principal w/ policy ceiling, ApiKey w/ resource binding, AuditEvent, RevokedToken, Secret)
 ├── schemas.py      # Pydantic request/response models
 ├── security.py     # Token minting, API key generation, bcrypt hashing, Fernet encryption
 ├── audit.py        # Append-only audit event emission
@@ -77,6 +77,10 @@ docs/               # Documentation
 | GET | `/v1/secrets/{name}` | Retrieve secret (resource-bound) | Bearer token with `secrets.read` scope |
 | PUT | `/v1/secrets/{name}` | Rotate secret value | X-Admin-Token |
 | DELETE | `/v1/secrets/{name}` | Soft-delete secret | X-Admin-Token |
+| GET | `/v1/principals` | List all principals | X-Admin-Token |
+| GET | `/v1/principals/{id}` | Principal detail with redacted keys | X-Admin-Token |
+| PUT | `/v1/principals/{id}/policy` | Update scope/resource ceiling | X-Admin-Token |
+| POST | `/v1/principals/{id}/disable` | Disable principal | X-Admin-Token |
 
 ## Non-Negotiable Security Invariants
 
@@ -88,6 +92,7 @@ These rules are enforced throughout the codebase and must never be weakened:
 4. **Audience binding required** — `aud` claim on all tokens; services reject wrong `aud`
 5. **All token fields mandatory** — `aud`, `scopes`, `resource`, `ttl_seconds` required at mint time (400 if missing)
 6. **Every privileged action is auditable** — trace_id → token_jti → action → result
+7. **Principal ceiling is absolute** — no API key or token can exceed `max_scopes_json` / `max_resources_json` (NULL = unconstrained, `[]` = deny all)
 
 ## CLI Tool
 
@@ -144,7 +149,8 @@ curl http://localhost:8000/v1/secrets/ssh-pass:server1 \
 
 - **API key format**: `{key_id}.{secret}` — plaintext returned only at creation
 - **Scope validation**: No wildcards allowed; explicit strings like `repo.read`, `ssh.exec`, `secrets.read`
-- **Resource binding**: Tokens can include a `resource` claim; secrets with resource require matching token
+- **Resource binding**: Tokens can include a `resource` claim; secrets with resource require matching token; API keys can restrict allowed resources via `allowed_resources_json`
+- **Principal ceiling**: `max_scopes_json` / `max_resources_json` on Principal; NULL = unconstrained, `[]` = deny all; enforced at key creation and token mint (defense-in-depth)
 - **TTL bounds**: 1–1800 seconds (enforced in `security.py:compute_exp()`)
 - **Trace propagation**: `X-Trace-Id` header flows through to audit metadata
 - **Error responses**: 401 for auth failures, 403 for permission/scope/resource failures
@@ -176,7 +182,7 @@ Tests use pytest with in-memory SQLite (`conftest.py` handles fixtures). Time-se
 
 **Roadmap (AuthZ hardening)** — see `docs/ROADMAP.md`:
 - **Phase 0** (Core Correctness) — COMPLETE: All token fields mandatory, empty scopes rejected, resource_unbound audit flag
-- **Phase 1** (Trust Boundaries) — Principal policy ceiling, scope/resource restrictions at principal level
+- **Phase 1** (Trust Boundaries) — COMPLETE: Principal policy ceiling, API key resource binding, principal management endpoints
 - **Phase 2** (Delegation) — Token exchange for job-scoped authority without standing privilege
 - **Phase 3** (Audit + Rotation) — Audit query API, signing/encryption key rotation
 
