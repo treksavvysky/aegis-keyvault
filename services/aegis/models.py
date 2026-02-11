@@ -22,6 +22,8 @@ class Principal(Base):
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
     )
+    max_scopes_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True, default=None)
+    max_resources_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True, default=None)
 
     api_keys = relationship("ApiKey", back_populates="principal")
     secrets = relationship("Secret", back_populates="principal")
@@ -34,6 +36,9 @@ class ApiKey(Base):
     principal_id: Mapped[str] = mapped_column(String(36), ForeignKey("principals.id"))
     key_hash: Mapped[str] = mapped_column(Text)
     allowed_scopes_json: Mapped[list[str]] = mapped_column(JSON)
+    allowed_resources_json: Mapped[list[str] | None] = mapped_column(
+        JSON, nullable=True, default=None,
+    )
     status: Mapped[str] = mapped_column(String(20), default="active")
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)

@@ -6,6 +6,9 @@ class KeyCreateRequest(BaseModel):
     principal_name: str | None = None
     principal_type: str | None = None
     allowed_scopes: list[str] = Field(default_factory=list)
+    allowed_resources: list[str] | None = None
+    max_scopes: list[str] | None = None
+    max_resources: list[str] | None = None
 
 
 class KeyCreateResponse(BaseModel):
@@ -94,3 +97,44 @@ class SecretRotateResponse(BaseModel):
     name: str
     resource: str | None
     rotated_at: str
+
+
+# --- Principal management schemas ---
+
+
+class PrincipalResponse(BaseModel):
+    id: str
+    name: str
+    type: str
+    status: str
+    max_scopes: list[str] | None
+    max_resources: list[str] | None
+    created_at: str
+
+
+class RedactedKeyInfo(BaseModel):
+    key_id: str
+    status: str
+    allowed_scopes: list[str]
+    allowed_resources: list[str] | None
+    created_at: str
+
+
+class PrincipalDetailResponse(BaseModel):
+    id: str
+    name: str
+    type: str
+    status: str
+    max_scopes: list[str] | None
+    max_resources: list[str] | None
+    created_at: str
+    api_keys: list[RedactedKeyInfo]
+
+
+class PrincipalListResponse(BaseModel):
+    principals: list[PrincipalResponse]
+
+
+class PolicyUpdateRequest(BaseModel):
+    max_scopes: list[str] | None = None
+    max_resources: list[str] | None = None

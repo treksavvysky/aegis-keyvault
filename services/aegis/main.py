@@ -119,7 +119,12 @@ def create_key(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="principal_name and principal_type required",
             )
-        principal = Principal(name=payload.principal_name, type=payload.principal_type)
+        principal = Principal(
+            name=payload.principal_name,
+            type=payload.principal_type,
+            max_scopes_json=payload.max_scopes,
+            max_resources_json=payload.max_resources,
+        )
         db.add(principal)
         db.commit()
         db.refresh(principal)
@@ -132,12 +137,48 @@ def create_key(
     except TokenError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    # Enforce principal scope ceiling
+    if principal.max_scopes_json is not None:
+        if not set(payload.allowed_scopes).issubset(set(principal.max_scopes_json)):
+            emit_audit_event(
+                db,
+                event_type="key.denied",
+                result="deny",
+                principal_id=principal.id,
+                metadata={
+                    "trace_id": request.state.trace_id,
+                    "reason": "scope_ceiling_exceeded",
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="scope_ceiling_exceeded",
+            )
+
+    # Enforce principal resource ceiling
+    if payload.allowed_resources and principal.max_resources_json is not None:
+        if not set(payload.allowed_resources).issubset(set(principal.max_resources_json)):
+            emit_audit_event(
+                db,
+                event_type="key.denied",
+                result="deny",
+                principal_id=principal.id,
+                metadata={
+                    "trace_id": request.state.trace_id,
+                    "reason": "resource_ceiling_exceeded",
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="resource_ceiling_exceeded",
+            )
+
     api_key, key_id, secret = generate_api_key()
     key = ApiKey(
         id=key_id,
         principal_id=principal.id,
         key_hash=hash_secret(secret),
         allowed_scopes_json=payload.allowed_scopes,
+        allowed_resources_json=payload.allowed_resources,
     )
     db.add(key)
     db.commit()
@@ -252,6 +293,68 @@ def mint_access_token(
             metadata={"trace_id": request.state.trace_id, "reason": "scope not allowed"},
         )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="scope not allowed")
+
+    # Check principal is active
+    principal = db.get(Principal, api_key.principal_id)
+    if principal and principal.status != "active":
+        emit_audit_event(
+            db,
+            event_type="token.denied",
+            result="deny",
+            principal_id=api_key.principal_id,
+            metadata={"trace_id": request.state.trace_id, "reason": "disabled_principal"},
+        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+
+    # Defense-in-depth: enforce principal scope ceiling
+    if principal and principal.max_scopes_json is not None:
+        if not set(requested_scopes).issubset(set(principal.max_scopes_json)):
+            emit_audit_event(
+                db,
+                event_type="token.denied",
+                result="deny",
+                principal_id=api_key.principal_id,
+                metadata={
+                    "trace_id": request.state.trace_id,
+                    "reason": "principal_ceiling_exceeded",
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="principal_ceiling_exceeded",
+            )
+
+    # Enforce principal resource ceiling
+    if principal and principal.max_resources_json is not None:
+        if payload.resource not in principal.max_resources_json:
+            emit_audit_event(
+                db,
+                event_type="token.denied",
+                result="deny",
+                principal_id=api_key.principal_id,
+                metadata={
+                    "trace_id": request.state.trace_id,
+                    "reason": "resource_ceiling_exceeded",
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="resource_ceiling_exceeded",
+            )
+
+    # Enforce API key resource binding
+    if api_key.allowed_resources_json is not None:
+        if payload.resource not in api_key.allowed_resources_json:
+            emit_audit_event(
+                db,
+                event_type="token.denied",
+                result="deny",
+                principal_id=api_key.principal_id,
+                metadata={"trace_id": request.state.trace_id, "reason": "resource not allowed"},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="resource not allowed",
+            )
 
     token, jti, ttl = mint_token(
         sub=api_key.principal_id,
@@ -632,3 +735,158 @@ def list_secrets(
             for s in secrets
         ]
     )
+
+
+# --- Principal management endpoints ---
+
+
+@app.get("/v1/principals", response_model=schemas.PrincipalListResponse)
+def list_principals(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> schemas.PrincipalListResponse:
+    require_admin(request)
+    principals = db.query(Principal).order_by(Principal.name).all()
+    return schemas.PrincipalListResponse(
+        principals=[
+            schemas.PrincipalResponse(
+                id=p.id,
+                name=p.name,
+                type=p.type,
+                status=p.status,
+                max_scopes=p.max_scopes_json,
+                max_resources=p.max_resources_json,
+                created_at=p.created_at.isoformat(),
+            )
+            for p in principals
+        ]
+    )
+
+
+@app.get("/v1/principals/{principal_id}", response_model=schemas.PrincipalDetailResponse)
+def get_principal(
+    principal_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> schemas.PrincipalDetailResponse:
+    require_admin(request)
+    principal = db.get(Principal, principal_id)
+    if principal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Principal not found")
+    return schemas.PrincipalDetailResponse(
+        id=principal.id,
+        name=principal.name,
+        type=principal.type,
+        status=principal.status,
+        max_scopes=principal.max_scopes_json,
+        max_resources=principal.max_resources_json,
+        created_at=principal.created_at.isoformat(),
+        api_keys=[
+            schemas.RedactedKeyInfo(
+                key_id=k.id,
+                status=k.status,
+                allowed_scopes=k.allowed_scopes_json or [],
+                allowed_resources=k.allowed_resources_json,
+                created_at=k.created_at.isoformat(),
+            )
+            for k in principal.api_keys
+        ],
+    )
+
+
+@app.put("/v1/principals/{principal_id}/policy")
+def update_principal_policy(
+    principal_id: str,
+    payload: schemas.PolicyUpdateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    require_admin(request)
+    principal = db.get(Principal, principal_id)
+    if principal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Principal not found")
+
+    # Check for conflicts with existing active API keys
+    new_max_scopes = payload.max_scopes
+    new_max_resources = payload.max_resources
+    violating_keys: list[str] = []
+
+    if new_max_scopes is not None:
+        ceiling = set(new_max_scopes)
+        for k in principal.api_keys:
+            if k.status == "active" and not set(k.allowed_scopes_json or []).issubset(ceiling):
+                violating_keys.append(k.id)
+
+    if new_max_resources is not None:
+        resource_ceiling = set(new_max_resources)
+        for k in principal.api_keys:
+            if k.status == "active" and k.allowed_resources_json is not None:
+                if not set(k.allowed_resources_json).issubset(resource_ceiling):
+                    if k.id not in violating_keys:
+                        violating_keys.append(k.id)
+
+    if violating_keys:
+        emit_audit_event(
+            db,
+            event_type="principal.policy_denied",
+            result="deny",
+            principal_id=principal.id,
+            metadata={
+                "trace_id": request.state.trace_id,
+                "reason": "policy_conflict",
+                "violating_keys": violating_keys,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="policy_conflict",
+        )
+
+    if new_max_scopes is not None:
+        principal.max_scopes_json = new_max_scopes
+    if new_max_resources is not None:
+        principal.max_resources_json = new_max_resources
+    principal.updated_at = dt.datetime.now(dt.timezone.utc)
+    db.add(principal)
+    db.commit()
+
+    emit_audit_event(
+        db,
+        event_type="principal.policy_updated",
+        result="ok",
+        principal_id=principal.id,
+        metadata={
+            "trace_id": request.state.trace_id,
+            "max_scopes": new_max_scopes,
+            "max_resources": new_max_resources,
+        },
+    )
+
+    return {"status": "updated", "principal_id": principal.id}
+
+
+@app.post("/v1/principals/{principal_id}/disable")
+def disable_principal(
+    principal_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    require_admin(request)
+    principal = db.get(Principal, principal_id)
+    if principal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Principal not found")
+
+    principal.status = "disabled"
+    principal.updated_at = dt.datetime.now(dt.timezone.utc)
+    db.add(principal)
+    db.commit()
+
+    emit_audit_event(
+        db,
+        event_type="principal.disabled",
+        result="ok",
+        principal_id=principal.id,
+        metadata={"trace_id": request.state.trace_id},
+    )
+
+    return {"status": "disabled", "principal_id": principal.id}
